@@ -1,0 +1,12 @@
+[package]
+name = "ansi-interpreter"
+version = "0.1.0"
+authors = ["Daniel Keep <daniel.keep@gmail.com>"]
+
+[dependencies]
+conv = "0.3.0"
+num = "0.1.27"
+smallvec = "0.1.5"
+
+[dev-dependencies]
+itertools = "0.4.5"

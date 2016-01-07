@@ -4,6 +4,9 @@ extern crate smallvec;
 
 pub use ansi::{AnsiIntercept, EraseDisplay, EraseLine, AnsiInterpret};
 
+// TODO: reconsider exporting this.
+pub use win32::wrap_stdout;
+
 #[macro_use] mod macros;
 
 mod ansi;

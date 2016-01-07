@@ -3,13 +3,14 @@
 #![allow(unused_mut)]
 #![allow(unused_variables)]
 
+use std::cmp::min;
 use std::error::Error;
 use std::ops::{Add, Mul};
 use std::io::{self, Write};
 use conv::{TryFrom, TryInto, UnwrapOk, ValueInto};
 use num::Zero;
 use smallvec::{Array, SmallVec};
-use util::{Counted, CountedIter};
+use util::{Counted, CountedIter, drop_front};
 
 // Should be two pointers worth to get the most out of SmallVec.
 #[cfg(target_pointer_width = "32")]
@@ -104,15 +105,23 @@ where
         } {
             Ok(EscSeqParse::IncompleteSeq) => {
                 self.buffer.extend(buf.iter().cloned());
+
+                // If the buffer is getting suspiciously long, give up and dump the contents of the buffer anyway.  This is so that spurious escape bytes don't cause large chunks of output to disappear.
+                if self.buffer.len() > MAX_SEQ_SIZE {
+                    let r = self.sink.write_all(&self.buffer);
+                    self.buffer = SmallVec::new();
+                    try!(r);
+                }
+
                 Ok(buf.len())
             },
 
             Ok(EscSeqParse::UsedBytes(n)) => {
                 let mut n = n.value_into().unwrap_ok();
-                for _ in 0..::std::cmp::min(n, self.buffer.len()) {
-                    self.buffer.pop();
-                    n -= 1;
-                }
+                let drop_n = min(n, self.buffer.len());
+                n -= drop_n;
+
+                drop_front(&mut self.buffer, drop_n);
 
                 // Say that we've consumed the relevant bytes from `buf`.
                 Ok(n)

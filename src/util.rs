@@ -1,3 +1,5 @@
+use smallvec::{Array, SmallVec};
+
 pub trait Counted {
     fn counted(&self) -> usize;
 }
@@ -42,4 +44,16 @@ where I: Iterator {
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.iter.size_hint()
     }
+}
+
+// FIXME: This sucks.
+pub fn drop_front<A, T>(sv: &mut SmallVec<A>, n: usize)
+where
+    A: Array<Item=T>,
+    T: Clone,
+{
+    assert!(n <= sv.len());
+
+    let tmp = sv.iter().skip(n).cloned().collect();
+    ::std::mem::replace(sv, tmp);
 }

@@ -245,17 +245,13 @@ where
 {
     use self::EscSeqParse::*;
 
-    println!("- extract_sequence(_, _, _)");
-
     let bytes_start = bytes.clone();
     let mut bytes = CountedIter::new(bytes);
     assert_eq!(bytes.next(), Some(ESC));
 
     match bytes.next() {
         Some(b) => {
-            println!("  - b: {:?} ({:?})", b, b as char);
             if b == b'[' || !is_escape_end(b) {
-                println!("  - ! is_escape_end");
                 // Consume up to the end of the sequence.
                 match (&mut bytes).filter(|&b| is_escape_end(b)).next() {
                     Some(_) => (),
@@ -263,7 +259,6 @@ where
                 }
             }
             let seq_len = bytes.counted();
-            println!("  - seq_len: {:?}", seq_len);
             let seq_bytes = bytes_start.take(seq_len).skip(1);
             match parse_sequence(seq_bytes, sink, interp) {
                 // Don't forget that we dropped the leading `ESC`.
@@ -294,7 +289,6 @@ where
     I'm wondering the same thing.  *But* this code is more complicated, and *might* be more efficient.  Best way to find out?  Implement *this* first, then see if the simpler version is faster.  Would have to do both for a comparison, anyway.
     */
     let mut bytes: SmallVec<[u8; 16]> = bytes.collect();
-    println!("- parse_sequence({:?}, _, _)", bytes);
 
     let ok_result = {let l = bytes.len() as u16; move |()| UsedBytes(l)};
 

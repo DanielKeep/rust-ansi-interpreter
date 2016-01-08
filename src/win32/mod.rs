@@ -2,6 +2,10 @@
 extern crate kernel32;
 extern crate winapi;
 
+pub use self::intercept::intercept_stdio;
+
+mod intercept;
+
 use std::io::{self, Write};
 use self::winapi::{HANDLE, WORD};
 use ansi::{AnsiIntercept, EraseDisplay, EraseLine, AnsiInterpret};

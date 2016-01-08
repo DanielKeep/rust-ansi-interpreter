@@ -25,6 +25,15 @@ macro_rules! marker_error {
     };
 }
 
+macro_rules! perror {
+    ($($args:expr),* $(,)*) => {
+        {
+            use ::std::io::Write;
+            write!(::std::io::stderr(), $($args),*).unwrap();
+        }
+    };
+}
+
 macro_rules! rethrow {
     ($e:expr) => {
         match $e {

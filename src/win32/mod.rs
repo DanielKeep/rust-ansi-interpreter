@@ -21,7 +21,7 @@ const FOREGROUND_RED: WORD = winapi::FOREGROUND_RED as WORD;
 const FOREGROUND_INTENSITY: WORD = winapi::FOREGROUND_INTENSITY as WORD;
 const FOREGROUND_WHITE: WORD = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
 
-const _BACKGROUND_SHIFT: usize = 4;
+const BACKGROUND_SHIFT: usize = 4;
 const BACKGROUND_BLUE: WORD = winapi::BACKGROUND_BLUE as WORD;
 const BACKGROUND_GREEN: WORD = winapi::BACKGROUND_GREEN as WORD;
 const BACKGROUND_RED: WORD = winapi::BACKGROUND_RED as WORD;
@@ -124,20 +124,28 @@ impl AnsiInterpret for ConsoleInterpreter {
                     // Default-foreground.
                     *attrs = (*attrs & !FOREGROUND_INTENSITY) | FOREGROUND_WHITE;
                 })),
-                _n @ 40...47 => {
-                    panic!("background")
-                },
-                49 => {
-                    panic!("default-foreground")
-                },
+                _n @ 40...47 => try!(self.mut_text_attrs(|attrs| {
+                    // Background.
+                    if let Some(c) = sgr_color_to_bg(n) {
+                        *attrs = (*attrs & !BACKGROUND_WHITE) | c;
+                    }
+                })),
+                49 => try!(self.mut_text_attrs(|attrs| {
+                    // Default-background.
+                    *attrs = (*attrs & !BACKGROUND_INTENSITY) | BACKGROUND_WHITE;
+                })),
                 n @ 90...97 => try!(self.mut_text_attrs(|attrs| {
+                    // Bold-foreground.
                     if let Some(c) = sgr_color_to_fg(n) {
                         *attrs = (*attrs & !FOREGROUND_WHITE) | c;
                     }
                 })),
-                _n @ 100...107 => {
-                    panic!("bold-background")
-                },
+                _n @ 100...107 => try!(self.mut_text_attrs(|attrs| {
+                    // Bold-background.
+                    if let Some(c) = sgr_color_to_bg(n) {
+                        *attrs = (*attrs & !BACKGROUND_WHITE) | c;
+                    }
+                })),
                 _ => {
                     // Do nothing.
                 }
@@ -179,9 +187,18 @@ fn test_winapi_consts() {
     use self::FOREGROUND_BLUE as FB;
     use self::FOREGROUND_SHIFT as FS;
 
+    use self::BACKGROUND_RED as BR;
+    use self::BACKGROUND_GREEN as BG;
+    use self::BACKGROUND_BLUE as BB;
+    use self::BACKGROUND_SHIFT as BS;
+
     assert_eq!(1 << FS, FB);
     assert_eq!(2 << FS, FG);
     assert_eq!(4 << FS, FR);
+
+    assert_eq!(1 << BS, BB);
+    assert_eq!(2 << BS, BG);
+    assert_eq!(4 << BS, BR);
 }
 
 fn sgr_color_to_fg(n: u8) -> Option<WORD> {
@@ -198,6 +215,25 @@ fn sgr_color_to_fg(n: u8) -> Option<WORD> {
         n @ 30...37 => split_bits(n - 30) << FS,
         n @ 90...97 => (split_bits(n - 90) << FS) | FI,
         39 => 0,
+
+        _ => return None
+    })
+}
+
+fn sgr_color_to_bg(n: u8) -> Option<WORD> {
+    use self::BACKGROUND_INTENSITY as BI;
+    use self::BACKGROUND_SHIFT as BS;
+
+    fn split_bits(c: u8) -> WORD {
+        (((c & 1) << 2)
+            | (c & 2)
+            | ((c & 4) >> 2)) as WORD
+    }
+
+    Some(match n {
+        n @ 40...47 => split_bits(n - 40) << BS,
+        n @ 100...107 => (split_bits(n - 100) << BS) | BI,
+        49 => 0,
 
         _ => return None
     })

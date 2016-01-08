@@ -21,6 +21,9 @@ const MIN_BUFFER_SIZE: usize = 16;
 // How long will we let a sequence get before we give up and assume someone's trying to crash us?
 const MAX_SEQ_SIZE: usize = 256;
 
+// How much stack space should we use for buffering sequences during parsing?  This has to be a number supported by `smallvec`.
+const SEQ_BUFFER_SIZE: usize = 32;
+
 const ESC: u8 = 0x1b;
 
 marker_error! {
@@ -260,7 +263,8 @@ where
             }
             let seq_len = bytes.counted();
             let seq_bytes = bytes_start.take(seq_len).skip(1);
-            match parse_sequence(seq_bytes, sink, interp) {
+            let seq_bytes: SmallVec<[u8; SEQ_BUFFER_SIZE]> = seq_bytes.collect();
+            match parse_sequence(&seq_bytes, sink, interp) {
                 // Don't forget that we dropped the leading `ESC`.
                 Ok(UsedBytes(bs)) => Ok(UsedBytes(bs+1)),
                 other => rethrow!(other),
@@ -273,9 +277,8 @@ where
 /**
 Parse the extracted escape sequence, and call the appropriate trait method.
 */
-fn parse_sequence<B, W, I>(bytes: B, sink: &mut W, interp: &mut I) -> ParseResult
+fn parse_sequence<W, I>(bytes: &[u8], sink: &mut W, interp: &mut I) -> ParseResult
 where
-    B: Iterator<Item=u8>,
     W: Write,
     I: AnsiInterpret,
 {
@@ -283,13 +286,7 @@ where
 
     /*
     One somewhat frustrating aspect of how ANSI codes are structured is that the terminal letter is what decides *which* code you're talking about.  This makes doing any sort of pre-emptive parsing a bit dicey.
-
-    So, rather than play silly buggers, we'll just shove the whole lot into a (hopefully large enough, on-stack) array and look at the end.  You might wonder why we didn't just do that in the first place rather than mess around with iterators.
-
-    I'm wondering the same thing.  *But* this code is more complicated, and *might* be more efficient.  Best way to find out?  Implement *this* first, then see if the simpler version is faster.  Would have to do both for a comparison, anyway.
     */
-    let mut bytes: SmallVec<[u8; 16]> = bytes.collect();
-
     let ok_result = {let l = bytes.len() as u16; move |()| UsedBytes(l)};
 
     if let Some(&b'[') = bytes.first() {

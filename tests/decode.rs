@@ -13,7 +13,7 @@ macro_rules! rethrow {
     };
 }
 
-use std::io::Write;
+use std::io::{self, Write};
 use itertools::Itertools;
 
 type GenError = Box<std::error::Error + Send + Sync>;
@@ -63,7 +63,10 @@ impl ai::AnsiInterpret for Dump {
         let mut bs = String::new();
         for b in bytes {
             use std::fmt::Write;
-            write!(bs, "{:02x}", b).unwrap();
+            try!(write!(bs, "{:02x}", b)
+                .map_err(|_| io::Error::new(
+                    io::ErrorKind::Other,
+                    "formatting error")));
         }
         rethrow!(write!(sink, "[UNK:{}]", bs))
     }
@@ -97,8 +100,9 @@ An unreasonably long, invalid sequence:
 1234567890123456123456789012345612345678901234561234567890123456\
 1234567890123456123456789012345612345678901234561234567890123456.
 "
-        ).unwrap();
-    }
+        )
+    }.expect(&format!("could not write to interceptor; got {:?}", ::std::str::from_utf8(&s).unwrap_or("{invalid}")));
+
     assert_eq!(&*String::from_utf8(s).unwrap(),
 "
 Cursor up four: [CUU:4] = [CUU:2][CUU:2].

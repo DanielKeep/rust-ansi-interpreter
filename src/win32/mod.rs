@@ -7,10 +7,15 @@ pub use self::intercept::intercept_stdio;
 
 mod intercept;
 
+use std::cmp::min;
 use std::io::{self, Write};
-use self::winapi::{HANDLE, WORD};
+use self::winapi::{
+    HANDLE, WORD,
+    CONSOLE_SCREEN_BUFFER_INFO, COORD,
+};
 use self::wio::wide::ToWide;
 use ansi::{AnsiIntercept, EraseDisplay, EraseLine, AnsiInterpret};
+use conv::{ConvUtil, UnwrapOrSaturate};
 
 type GenError = Box<::std::error::Error + Send + Sync>;
 
@@ -42,18 +47,27 @@ pub fn wrap_stdout() -> Result<AnsiIntercept<io::Stdout, ConsoleInterpreter>, io
         }
     };
 
-    let ci = ConsoleInterpreter {
-        console: console,
-    };
+    let ci = ConsoleInterpreter::new(console);
 
     Ok(AnsiIntercept::new(stdout, ci))
 }
 
 pub struct ConsoleInterpreter {
     console: HANDLE,
+    scp: COORD,
 }
 
 impl ConsoleInterpreter {
+    pub fn new(console: HANDLE) -> Self {
+        ConsoleInterpreter {
+            console: console,
+            scp: COORD {
+                X: 0,
+                Y: 0,
+            }
+        }
+    }
+
     fn mut_text_attrs<F, R>(&self, f: F) -> Result<R, io::Error>
     where F: FnOnce(&mut WORD) -> R {
         unsafe {
@@ -88,8 +102,25 @@ impl AnsiInterpret for ConsoleInterpreter {
         rethrow!(write!(sink, "[CUF:{}]", c))
     }
 
-    fn cup_seq<W: Write>(&mut self, sink: &mut W, r: u16, c: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[CUP:{},{}]", r, c))
+    fn cup_seq<W: Write>(&mut self, _: &mut W, r: u16, c: u16) -> Result<(), GenError> {
+        let x = c.saturating_sub(1);
+        let y = r.saturating_sub(1);
+
+        let csbi = try!(get_console_screen_buffer_info(self.console));
+
+        let x = min(x, csbi.dwMaximumWindowSize.X.value_as::<u16>().unwrap_or_saturate() - 1);
+        let y = min(y, csbi.dwMaximumWindowSize.Y.value_as::<u16>().unwrap_or_saturate() - 1);
+
+        let abs_x = x + csbi.srWindow.Left.value_as::<u16>().unwrap_or_saturate();
+        let abs_y = y + csbi.srWindow.Top.value_as::<u16>().unwrap_or_saturate();
+
+        let abs_pos = COORD {
+            X: abs_x.value_as::<i16>().unwrap_or_saturate(),
+            Y: abs_y.value_as::<i16>().unwrap_or_saturate(),
+        };
+
+        try!(set_console_cursor_position(self.console, abs_pos));
+        Ok(())
     }
 
     fn ed_seq<W: Write>(&mut self, sink: &mut W, n: EraseDisplay) -> Result<(), GenError> {
@@ -160,12 +191,15 @@ impl AnsiInterpret for ConsoleInterpreter {
         rethrow!(sink.write_all(b"[DSR]"))
     }
 
-    fn scp_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> {
-        rethrow!(sink.write_all(b"[SCP]"))
+    fn scp_seq<W: Write>(&mut self, _: &mut W) -> Result<(), GenError> {
+        let info = try!(get_console_screen_buffer_info(self.console));
+        self.scp = info.dwCursorPosition;
+        Ok(())
     }
 
-    fn rcp_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> {
-        rethrow!(sink.write_all(b"[RCP]"))
+    fn rcp_seq<W: Write>(&mut self, _: &mut W) -> Result<(), GenError> {
+        try!(set_console_cursor_position(self.console, self.scp));
+        Ok(())
     }
 
     fn osc_txt_seq<W: Write>(&mut self, _: &mut W, n: u16, txt: &str) -> Result<(), GenError> {
@@ -254,4 +288,25 @@ fn sgr_color_to_bg(n: u8) -> Option<WORD> {
 
         _ => return None
     })
+}
+
+fn get_console_screen_buffer_info(console: HANDLE) -> io::Result<CONSOLE_SCREEN_BUFFER_INFO> {
+    unsafe {
+        let mut info = ::std::mem::zeroed();
+        if kernel32::GetConsoleScreenBufferInfo(console, &mut info) == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(info)
+        }
+    }
+}
+
+fn set_console_cursor_position(console: HANDLE, pos: COORD) -> io::Result<()> {
+    unsafe {
+        if kernel32::SetConsoleCursorPosition(console, pos) == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
 }

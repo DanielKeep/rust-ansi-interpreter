@@ -28,9 +28,7 @@ fn try_intercept_stdio() -> io::Result<()> {
             use std::os::windows::io::AsRawHandle;
 
             let conout_hand = conout.as_raw_handle();
-            let interp = ConsoleInterpreter {
-                console: conout_hand,
-            };
+            let interp = ConsoleInterpreter::new(conout_hand);
             let mut interc = AnsiIntercept::new(conout, interp);
 
             let mut orp = orp;

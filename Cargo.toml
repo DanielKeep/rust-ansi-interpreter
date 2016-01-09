@@ -11,6 +11,7 @@ smallvec = "0.1.5"
 # TODO: Make these target-dependent once Cargo stops sucking.
 kernel32-sys = "0.2.1"
 winapi = "0.2.5"
+wio = "0.1.0"
 
 [dev-dependencies]
 itertools = "0.4.5"

@@ -1,6 +1,7 @@
 #![cfg(windows)]
 extern crate kernel32;
 extern crate winapi;
+extern crate wio;
 
 pub use self::intercept::intercept_stdio;
 
@@ -8,6 +9,7 @@ mod intercept;
 
 use std::io::{self, Write};
 use self::winapi::{HANDLE, WORD};
+use self::wio::wide::ToWide;
 use ansi::{AnsiIntercept, EraseDisplay, EraseLine, AnsiInterpret};
 
 type GenError = Box<::std::error::Error + Send + Sync>;
@@ -164,6 +166,21 @@ impl AnsiInterpret for ConsoleInterpreter {
 
     fn rcp_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> {
         rethrow!(sink.write_all(b"[RCP]"))
+    }
+
+    fn osc_txt_seq<W: Write>(&mut self, _: &mut W, n: u16, txt: &str) -> Result<(), GenError> {
+        unsafe {
+            match n {
+                0 | 2 => {
+                    let wtxt = txt.to_wide_null();
+                    if kernel32::SetConsoleTitleW(wtxt.as_ptr()) == 0 {
+                        throw!(io::Error::last_os_error())
+                    }
+                    Ok(())
+                },
+                _ => Ok(())
+            }
+        }
     }
 
     fn hvp_seq<W: Write>(&mut self, sink: &mut W, r: u16, c: u16) -> Result<(), GenError> {

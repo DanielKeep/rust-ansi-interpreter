@@ -21,7 +21,7 @@ mod intercept;
 use std::cmp::{max, min};
 use std::io::{self, Write};
 use self::winapi::{
-    HANDLE, WORD,
+    DWORD, HANDLE, WORD,
     CONSOLE_SCREEN_BUFFER_INFO, COORD,
 };
 use self::wio::wide::ToWide;
@@ -194,8 +194,54 @@ impl AnsiInterpret for ConsoleInterpreter {
         Ok(())
     }
 
-    fn ed_seq<W: Write>(&mut self, sink: &mut W, n: EraseDisplay) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[ED:{}]", n as u8))
+    fn ed_seq<W: Write>(&mut self, _: &mut W, n: EraseDisplay) -> Result<(), GenError> {
+        use ansi::EraseDisplay::*;
+        unsafe {
+            let csbi = try!(get_console_screen_buffer_info(self.console));
+
+            let (start, len) = match n {
+                TopToCursor => {
+                    let start = COORD {
+                        X: 0,
+                        Y: csbi.srWindow.Top,
+                    };
+                    let lines = (csbi.dwCursorPosition.Y - start.Y) + 1;
+                    let lines = lines.value_as::<DWORD>().unwrap_or_saturate();
+                    let len = lines * csbi.dwSize.X.value_as::<DWORD>().unwrap_or_saturate();
+                    (start, len)
+                },
+                CursorToBottom => {
+                    let start = COORD {
+                        X: 0,
+                        Y: csbi.dwCursorPosition.Y,
+                    };
+                    let lines = (csbi.srWindow.Bottom - start.Y) + 1;
+                    let lines = lines.value_as::<DWORD>().unwrap_or_saturate();
+                    let len = lines * csbi.dwSize.X.value_as::<DWORD>().unwrap_or_saturate();
+                    (start, len)
+                },
+                All => {
+                    let start = COORD {
+                        X: 0,
+                        Y: csbi.srWindow.Top,
+                    };
+                    let lines = (csbi.srWindow.Bottom - start.Y) + 1;
+                    let lines = lines.value_as::<DWORD>().unwrap_or_saturate();
+                    let len = lines * csbi.dwSize.X.value_as::<DWORD>().unwrap_or_saturate();
+                    (start, len)
+                },
+            };
+
+            let mut dummy = 0;
+            if kernel32::FillConsoleOutputAttribute(self.console, csbi.wAttributes, len, start, &mut dummy) == 0 {
+                throw!(io::Error::last_os_error());
+            }
+            if kernel32::FillConsoleOutputCharacterW(self.console, 0x20, len, start, &mut dummy) == 0 {
+                throw!(io::Error::last_os_error());
+            }
+
+            Ok(())
+        }
     }
 
     fn el_seq<W: Write>(&mut self, sink: &mut W, n: EraseLine) -> Result<(), GenError> {

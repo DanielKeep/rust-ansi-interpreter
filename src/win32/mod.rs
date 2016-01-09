@@ -1,3 +1,14 @@
+/*
+
+# Todo
+
+## Track the window
+
+Most terminals work by having a fixed-size window, where lines pushed off the top go into the scrollback buffer.  Windows has a giant buffer with a sliding window.
+
+It would produce more "expected" behaviour if the interpreter kept track of where the window was "up to", so that even if you scroll away, it can work out how to interpret window positions relative to the buffer.
+
+*/
 #![cfg(windows)]
 extern crate kernel32;
 extern crate winapi;
@@ -7,7 +18,7 @@ pub use self::intercept::intercept_stdio;
 
 mod intercept;
 
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::io::{self, Write};
 use self::winapi::{
     HANDLE, WORD,
@@ -86,20 +97,80 @@ impl ConsoleInterpreter {
 }
 
 impl AnsiInterpret for ConsoleInterpreter {
-    fn cuu_seq<W: Write>(&mut self, sink: &mut W, r: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[CUU:{}]", r))
+    fn cuu_seq<W: Write>(&mut self, _: &mut W, r: u16) -> Result<(), GenError> {
+        if r == 0 { return Ok(()); }
+
+        let csbi = try!(get_console_screen_buffer_info(self.console));
+
+        let abs_y = csbi.dwCursorPosition.Y;
+        let abs_x = csbi.dwCursorPosition.X;
+
+        let abs_y = max(0, abs_y.saturating_sub(r.value_as::<i16>().unwrap_or_saturate()));
+
+        let abs_pos = COORD {
+            X: abs_x,
+            Y: abs_y,
+        };
+
+        try!(set_console_cursor_position(self.console, abs_pos));
+        Ok(())
     }
 
-    fn cud_seq<W: Write>(&mut self, sink: &mut W, r: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[CUD:{}]", r))
+    fn cud_seq<W: Write>(&mut self, _: &mut W, r: u16) -> Result<(), GenError> {
+        if r == 0 { return Ok(()); }
+
+        let csbi = try!(get_console_screen_buffer_info(self.console));
+
+        let abs_y = csbi.dwCursorPosition.Y;
+        let abs_x = csbi.dwCursorPosition.X;
+
+        let abs_y = min(csbi.dwSize.Y - 1, abs_y.saturating_add(r.value_as::<i16>().unwrap_or_saturate()));
+
+        let abs_pos = COORD {
+            X: abs_x,
+            Y: abs_y,
+        };
+
+        try!(set_console_cursor_position(self.console, abs_pos));
+        Ok(())
     }
 
-    fn cuf_seq<W: Write>(&mut self, sink: &mut W, c: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[CUF:{}]", c))
+    fn cuf_seq<W: Write>(&mut self, _: &mut W, c: u16) -> Result<(), GenError> {
+        if c == 0 { return Ok(()); }
+
+        let csbi = try!(get_console_screen_buffer_info(self.console));
+
+        let abs_y = csbi.dwCursorPosition.Y;
+        let abs_x = csbi.dwCursorPosition.X;
+
+        let abs_x = min(csbi.dwSize.X - 1, abs_x.saturating_add(c.value_as::<i16>().unwrap_or_saturate()));
+
+        let abs_pos = COORD {
+            X: abs_x,
+            Y: abs_y,
+        };
+
+        try!(set_console_cursor_position(self.console, abs_pos));
+        Ok(())
     }
 
-    fn cub_seq<W: Write>(&mut self, sink: &mut W, c: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[CUF:{}]", c))
+    fn cub_seq<W: Write>(&mut self, _: &mut W, c: u16) -> Result<(), GenError> {
+        if c == 0 { return Ok(()); }
+
+        let csbi = try!(get_console_screen_buffer_info(self.console));
+
+        let abs_y = csbi.dwCursorPosition.Y;
+        let abs_x = csbi.dwCursorPosition.X;
+
+        let abs_x = max(0, abs_x.saturating_sub(c.value_as::<i16>().unwrap_or_saturate()));
+
+        let abs_pos = COORD {
+            X: abs_x,
+            Y: abs_y,
+        };
+
+        try!(set_console_cursor_position(self.console, abs_pos));
+        Ok(())
     }
 
     fn cup_seq<W: Write>(&mut self, _: &mut W, r: u16, c: u16) -> Result<(), GenError> {
@@ -108,8 +179,8 @@ impl AnsiInterpret for ConsoleInterpreter {
 
         let csbi = try!(get_console_screen_buffer_info(self.console));
 
-        let x = min(x, csbi.dwMaximumWindowSize.X.value_as::<u16>().unwrap_or_saturate() - 1);
-        let y = min(y, csbi.dwMaximumWindowSize.Y.value_as::<u16>().unwrap_or_saturate() - 1);
+        let x = min(x, csbi.dwSize.X.value_as::<u16>().unwrap_or_saturate() - 1);
+        let y = min(y, csbi.dwSize.Y.value_as::<u16>().unwrap_or_saturate() - 1);
 
         let abs_x = x + csbi.srWindow.Left.value_as::<u16>().unwrap_or_saturate();
         let abs_y = y + csbi.srWindow.Top.value_as::<u16>().unwrap_or_saturate();

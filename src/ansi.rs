@@ -222,6 +222,8 @@ pub trait AnsiInterpret {
     fn scp_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> { Ok(()) }
     fn rcp_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> { Ok(()) }
 
+    fn osc_txt_seq<W: Write>(&mut self, sink: &mut W, n: u16, txt: &str) -> Result<(), GenError> { Ok(()) }
+
     fn hvp_seq<W: Write>(&mut self, sink: &mut W, r: u16, c: u16) -> Result<(), GenError> { self.cup_seq(sink, r, c) }
 
     fn other_seq<W: Write>(&mut self, sink: &mut W, bytes: &[u8]) -> Result<(), GenError> {
@@ -418,6 +420,31 @@ where
             },
             _ => rethrow!(interp.other_seq(sink, &bytes).map(ok_result))
         }
+    } else if let Some(&b']') = bytes.first() {
+        // Grab leading number.
+        let tail_bytes = &bytes[1..];
+        let (tail_bytes, n) = try!(parse_num(tail_bytes));
+        let n = match n { Some(n) => n, None => throw!(MalformedSeq) };
+
+        // Strip ;
+        match tail_bytes.first() {
+            Some(&b';') => (),
+            _ => return rethrow!(interp.other_seq(sink, &bytes).map(ok_result))
+        }
+        let tail_bytes = &tail_bytes[1..];
+
+        // Strip ending ST
+        let drop_end = match tail_bytes.last() {
+            Some(&7) => 1,
+            Some(&b'\\') => 2,
+            _ => throw!(MalformedSeq)
+        };
+
+        // Pull out text
+        let txt = &tail_bytes[..tail_bytes.len() - drop_end];
+        let txt = ::std::str::from_utf8(txt).expect("non-ASCII in OSC txt");
+
+        rethrow!(interp.osc_txt_seq(sink, n, txt).map(ok_result))
     } else {
         rethrow!(interp.other_seq(sink, &bytes).map(ok_result))
     }

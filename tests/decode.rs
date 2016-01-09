@@ -59,6 +59,10 @@ impl ai::AnsiInterpret for Dump {
         rethrow!(write!(sink, "[HVP:{},{}]", r, c))
     }
 
+    fn osc_txt_seq<W: Write>(&mut self, sink: &mut W, n: u16, txt: &str) -> Result<(), GenError> {
+        rethrow!(write!(sink, "[OSC:{},{:?}]", n, txt))
+    }
+
     fn other_seq<W: Write>(&mut self, sink: &mut W, bytes: &[u8]) -> Result<(), GenError> {
         let mut bs = String::new();
         for b in bytes {
@@ -99,6 +103,8 @@ An unreasonably long, invalid sequence:
 1234567890123456123456789012345612345678901234561234567890123456\
 1234567890123456123456789012345612345678901234561234567890123456\
 1234567890123456123456789012345612345678901234561234567890123456.
+
+Terminal title: \x1b]2;Final Destination (terminal, geddit?)\x07.
 "
         )
     }.expect(&format!("could not write to interceptor; got {:?}", ::std::str::from_utf8(&s).unwrap_or("{invalid}")));
@@ -124,6 +130,8 @@ An unreasonably long, invalid sequence:
 1234567890123456123456789012345612345678901234561234567890123456\
 1234567890123456123456789012345612345678901234561234567890123456\
 1234567890123456123456789012345612345678901234561234567890123456.
+
+Terminal title: [OSC:2,\"Final Destination (terminal, geddit?)\"].
 "
     );
 }

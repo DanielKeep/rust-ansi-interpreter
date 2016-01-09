@@ -25,7 +25,7 @@ use self::winapi::{
     CONSOLE_SCREEN_BUFFER_INFO, COORD,
 };
 use self::wio::wide::ToWide;
-use ansi::{AnsiIntercept, EraseDisplay, EraseLine, AnsiInterpret};
+use ansi::{EraseDisplay, EraseLine, AnsiInterpret};
 use conv::{ConvUtil, UnwrapOrSaturate};
 
 type GenError = Box<::std::error::Error + Send + Sync>;
@@ -45,23 +45,6 @@ const BACKGROUND_GREEN: WORD = winapi::BACKGROUND_GREEN as WORD;
 const BACKGROUND_RED: WORD = winapi::BACKGROUND_RED as WORD;
 const BACKGROUND_INTENSITY: WORD = winapi::BACKGROUND_INTENSITY as WORD;
 const BACKGROUND_WHITE: WORD = BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE;
-
-// TODO: reconsider this
-pub fn wrap_stdout() -> Result<AnsiIntercept<ConsoleInterpreter<io::Stdout>>, io::Error> {
-    let stdout = io::stdout();
-
-    let console = unsafe {
-        match kernel32::GetStdHandle(winapi::STD_OUTPUT_HANDLE) {
-            h if h == winapi::INVALID_HANDLE_VALUE => return Err(io::Error::last_os_error()),
-            h if h.is_null() => return Err(io::Error::new(io::ErrorKind::NotFound, "stdout not connected")),
-            h => h,
-        }
-    };
-
-    let ci = ConsoleInterpreter::new(stdout, console);
-
-    Ok(AnsiIntercept::new(ci))
-}
 
 pub struct ConsoleInterpreter<W> where W: Write {
     sink: W,

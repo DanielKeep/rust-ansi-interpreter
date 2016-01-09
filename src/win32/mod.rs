@@ -48,7 +48,7 @@ const BACKGROUND_WHITE: WORD = BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BL
 
 pub struct ConsoleInterpreter<W> where W: Write {
     sink: W,
-    console: HANDLE,
+    console: SendHandle,
     scp: COORD,
 }
 
@@ -56,7 +56,7 @@ impl<W> ConsoleInterpreter<W> where W: Write {
     pub fn new(sink: W, console: HANDLE) -> Self {
         ConsoleInterpreter {
             sink: sink,
-            console: console,
+            console: SendHandle(console),
             scp: COORD {
                 X: 0,
                 Y: 0,
@@ -68,12 +68,12 @@ impl<W> ConsoleInterpreter<W> where W: Write {
     where F: FnOnce(&mut WORD) -> R {
         unsafe {
             let mut info = ::std::mem::zeroed();
-            if kernel32::GetConsoleScreenBufferInfo(self.console, &mut info) == 0 {
+            if kernel32::GetConsoleScreenBufferInfo(self.console.0, &mut info) == 0 {
                 return Err(io::Error::last_os_error());
             }
             let mut attrs = info.wAttributes;
             let r = f(&mut attrs);
-            if kernel32::SetConsoleTextAttribute(self.console, attrs) == 0 {
+            if kernel32::SetConsoleTextAttribute(self.console.0, attrs) == 0 {
                 return Err(io::Error::last_os_error());
             }
             Ok(r)
@@ -93,7 +93,7 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
     fn cuu_seq(&mut self, r: u16) -> Result<(), GenError> {
         if r == 0 { return Ok(()); }
 
-        let csbi = try!(get_console_screen_buffer_info(self.console));
+        let csbi = try!(get_console_screen_buffer_info(self.console.0));
 
         let abs_y = csbi.dwCursorPosition.Y;
         let abs_x = csbi.dwCursorPosition.X;
@@ -105,14 +105,14 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
             Y: abs_y,
         };
 
-        try!(set_console_cursor_position(self.console, abs_pos));
+        try!(set_console_cursor_position(self.console.0, abs_pos));
         Ok(())
     }
 
     fn cud_seq(&mut self, r: u16) -> Result<(), GenError> {
         if r == 0 { return Ok(()); }
 
-        let csbi = try!(get_console_screen_buffer_info(self.console));
+        let csbi = try!(get_console_screen_buffer_info(self.console.0));
 
         let abs_y = csbi.dwCursorPosition.Y;
         let abs_x = csbi.dwCursorPosition.X;
@@ -124,14 +124,14 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
             Y: abs_y,
         };
 
-        try!(set_console_cursor_position(self.console, abs_pos));
+        try!(set_console_cursor_position(self.console.0, abs_pos));
         Ok(())
     }
 
     fn cuf_seq(&mut self, c: u16) -> Result<(), GenError> {
         if c == 0 { return Ok(()); }
 
-        let csbi = try!(get_console_screen_buffer_info(self.console));
+        let csbi = try!(get_console_screen_buffer_info(self.console.0));
 
         let abs_y = csbi.dwCursorPosition.Y;
         let abs_x = csbi.dwCursorPosition.X;
@@ -143,14 +143,14 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
             Y: abs_y,
         };
 
-        try!(set_console_cursor_position(self.console, abs_pos));
+        try!(set_console_cursor_position(self.console.0, abs_pos));
         Ok(())
     }
 
     fn cub_seq(&mut self, c: u16) -> Result<(), GenError> {
         if c == 0 { return Ok(()); }
 
-        let csbi = try!(get_console_screen_buffer_info(self.console));
+        let csbi = try!(get_console_screen_buffer_info(self.console.0));
 
         let abs_y = csbi.dwCursorPosition.Y;
         let abs_x = csbi.dwCursorPosition.X;
@@ -162,7 +162,7 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
             Y: abs_y,
         };
 
-        try!(set_console_cursor_position(self.console, abs_pos));
+        try!(set_console_cursor_position(self.console.0, abs_pos));
         Ok(())
     }
 
@@ -170,7 +170,7 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
         let x = c.saturating_sub(1);
         let y = r.saturating_sub(1);
 
-        let csbi = try!(get_console_screen_buffer_info(self.console));
+        let csbi = try!(get_console_screen_buffer_info(self.console.0));
 
         let x = min(x, csbi.dwSize.X.value_as::<u16>().unwrap_or_saturate() - 1);
         let y = min(y, csbi.dwSize.Y.value_as::<u16>().unwrap_or_saturate() - 1);
@@ -183,14 +183,14 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
             Y: abs_y.value_as::<i16>().unwrap_or_saturate(),
         };
 
-        try!(set_console_cursor_position(self.console, abs_pos));
+        try!(set_console_cursor_position(self.console.0, abs_pos));
         Ok(())
     }
 
     fn ed_seq(&mut self, n: EraseDisplay) -> Result<(), GenError> {
         use ansi::EraseDisplay::*;
         unsafe {
-            let csbi = try!(get_console_screen_buffer_info(self.console));
+            let csbi = try!(get_console_screen_buffer_info(self.console.0));
 
             let (start, len) = match n {
                 TopToCursor => {
@@ -226,10 +226,10 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
             };
 
             let mut dummy = 0;
-            if kernel32::FillConsoleOutputAttribute(self.console, csbi.wAttributes, len, start, &mut dummy) == 0 {
+            if kernel32::FillConsoleOutputAttribute(self.console.0, csbi.wAttributes, len, start, &mut dummy) == 0 {
                 throw!(io::Error::last_os_error());
             }
-            if kernel32::FillConsoleOutputCharacterW(self.console, 0x20, len, start, &mut dummy) == 0 {
+            if kernel32::FillConsoleOutputCharacterW(self.console.0, 0x20, len, start, &mut dummy) == 0 {
                 throw!(io::Error::last_os_error());
             }
 
@@ -240,7 +240,7 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
     fn el_seq(&mut self, n: EraseLine) -> Result<(), GenError> {
         use ansi::EraseLine::*;
         unsafe {
-            let csbi = try!(get_console_screen_buffer_info(self.console));
+            let csbi = try!(get_console_screen_buffer_info(self.console.0));
 
             let (start, len) = match n {
                 StartToCursor => {
@@ -273,10 +273,10 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
             };
 
             let mut dummy = 0;
-            if kernel32::FillConsoleOutputAttribute(self.console, csbi.wAttributes, len, start, &mut dummy) == 0 {
+            if kernel32::FillConsoleOutputAttribute(self.console.0, csbi.wAttributes, len, start, &mut dummy) == 0 {
                 throw!(io::Error::last_os_error());
             }
-            if kernel32::FillConsoleOutputCharacterW(self.console, 0x20, len, start, &mut dummy) == 0 {
+            if kernel32::FillConsoleOutputCharacterW(self.console.0, 0x20, len, start, &mut dummy) == 0 {
                 throw!(io::Error::last_os_error());
             }
 
@@ -345,13 +345,13 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
     }
 
     fn scp_seq(&mut self) -> Result<(), GenError> {
-        let info = try!(get_console_screen_buffer_info(self.console));
+        let info = try!(get_console_screen_buffer_info(self.console.0));
         self.scp = info.dwCursorPosition;
         Ok(())
     }
 
     fn rcp_seq(&mut self) -> Result<(), GenError> {
-        try!(set_console_cursor_position(self.console, self.scp));
+        try!(set_console_cursor_position(self.console.0, self.scp));
         Ok(())
     }
 
@@ -463,3 +463,10 @@ fn set_console_cursor_position(console: HANDLE, pos: COORD) -> io::Result<()> {
         }
     }
 }
+
+struct SendHandle(HANDLE);
+
+/**
+`HANDLE` is a raw pointer to void which is *actually* a handle to a Win32 kernel object.  This is safe to transfer between threads.
+*/
+unsafe impl Send for SendHandle {}

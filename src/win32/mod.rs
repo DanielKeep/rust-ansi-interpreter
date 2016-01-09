@@ -47,7 +47,7 @@ const BACKGROUND_INTENSITY: WORD = winapi::BACKGROUND_INTENSITY as WORD;
 const BACKGROUND_WHITE: WORD = BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE;
 
 // TODO: reconsider this
-pub fn wrap_stdout() -> Result<AnsiIntercept<io::Stdout, ConsoleInterpreter>, io::Error> {
+pub fn wrap_stdout() -> Result<AnsiIntercept<ConsoleInterpreter<io::Stdout>>, io::Error> {
     let stdout = io::stdout();
 
     let console = unsafe {
@@ -58,19 +58,21 @@ pub fn wrap_stdout() -> Result<AnsiIntercept<io::Stdout, ConsoleInterpreter>, io
         }
     };
 
-    let ci = ConsoleInterpreter::new(console);
+    let ci = ConsoleInterpreter::new(stdout, console);
 
-    Ok(AnsiIntercept::new(stdout, ci))
+    Ok(AnsiIntercept::new(ci))
 }
 
-pub struct ConsoleInterpreter {
+pub struct ConsoleInterpreter<W> where W: Write {
+    sink: W,
     console: HANDLE,
     scp: COORD,
 }
 
-impl ConsoleInterpreter {
-    pub fn new(console: HANDLE) -> Self {
+impl<W> ConsoleInterpreter<W> where W: Write {
+    pub fn new(sink: W, console: HANDLE) -> Self {
         ConsoleInterpreter {
+            sink: sink,
             console: console,
             scp: COORD {
                 X: 0,
@@ -96,8 +98,16 @@ impl ConsoleInterpreter {
     }
 }
 
-impl AnsiInterpret for ConsoleInterpreter {
-    fn cuu_seq<W: Write>(&mut self, _: &mut W, r: u16) -> Result<(), GenError> {
+impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
+    fn write_text(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.sink.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.sink.flush()
+    }
+
+    fn cuu_seq(&mut self, r: u16) -> Result<(), GenError> {
         if r == 0 { return Ok(()); }
 
         let csbi = try!(get_console_screen_buffer_info(self.console));
@@ -116,7 +126,7 @@ impl AnsiInterpret for ConsoleInterpreter {
         Ok(())
     }
 
-    fn cud_seq<W: Write>(&mut self, _: &mut W, r: u16) -> Result<(), GenError> {
+    fn cud_seq(&mut self, r: u16) -> Result<(), GenError> {
         if r == 0 { return Ok(()); }
 
         let csbi = try!(get_console_screen_buffer_info(self.console));
@@ -135,7 +145,7 @@ impl AnsiInterpret for ConsoleInterpreter {
         Ok(())
     }
 
-    fn cuf_seq<W: Write>(&mut self, _: &mut W, c: u16) -> Result<(), GenError> {
+    fn cuf_seq(&mut self, c: u16) -> Result<(), GenError> {
         if c == 0 { return Ok(()); }
 
         let csbi = try!(get_console_screen_buffer_info(self.console));
@@ -154,7 +164,7 @@ impl AnsiInterpret for ConsoleInterpreter {
         Ok(())
     }
 
-    fn cub_seq<W: Write>(&mut self, _: &mut W, c: u16) -> Result<(), GenError> {
+    fn cub_seq(&mut self, c: u16) -> Result<(), GenError> {
         if c == 0 { return Ok(()); }
 
         let csbi = try!(get_console_screen_buffer_info(self.console));
@@ -173,7 +183,7 @@ impl AnsiInterpret for ConsoleInterpreter {
         Ok(())
     }
 
-    fn cup_seq<W: Write>(&mut self, _: &mut W, r: u16, c: u16) -> Result<(), GenError> {
+    fn cup_seq(&mut self, r: u16, c: u16) -> Result<(), GenError> {
         let x = c.saturating_sub(1);
         let y = r.saturating_sub(1);
 
@@ -194,7 +204,7 @@ impl AnsiInterpret for ConsoleInterpreter {
         Ok(())
     }
 
-    fn ed_seq<W: Write>(&mut self, _: &mut W, n: EraseDisplay) -> Result<(), GenError> {
+    fn ed_seq(&mut self, n: EraseDisplay) -> Result<(), GenError> {
         use ansi::EraseDisplay::*;
         unsafe {
             let csbi = try!(get_console_screen_buffer_info(self.console));
@@ -244,7 +254,7 @@ impl AnsiInterpret for ConsoleInterpreter {
         }
     }
 
-    fn el_seq<W: Write>(&mut self, _: &mut W, n: EraseLine) -> Result<(), GenError> {
+    fn el_seq(&mut self, n: EraseLine) -> Result<(), GenError> {
         use ansi::EraseLine::*;
         unsafe {
             let csbi = try!(get_console_screen_buffer_info(self.console));
@@ -291,8 +301,8 @@ impl AnsiInterpret for ConsoleInterpreter {
         }
     }
 
-    fn sgr_seq<W: Write>(&mut self, sink: &mut W, ns: &[u8]) -> Result<(), GenError> {
-        try!(sink.flush());
+    fn sgr_seq(&mut self, ns: &[u8]) -> Result<(), GenError> {
+        try!(self.flush());
         for &n in ns {
             match n {
                 0 => try!(self.mut_text_attrs(|attrs| {
@@ -347,22 +357,22 @@ impl AnsiInterpret for ConsoleInterpreter {
         Ok(())
     }
 
-    fn dsr_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> {
-        rethrow!(sink.write_all(b"[DSR]"))
+    fn dsr_seq(&mut self) -> Result<(), GenError> {
+        rethrow!(self.sink.write_all(b"[DSR]"))
     }
 
-    fn scp_seq<W: Write>(&mut self, _: &mut W) -> Result<(), GenError> {
+    fn scp_seq(&mut self) -> Result<(), GenError> {
         let info = try!(get_console_screen_buffer_info(self.console));
         self.scp = info.dwCursorPosition;
         Ok(())
     }
 
-    fn rcp_seq<W: Write>(&mut self, _: &mut W) -> Result<(), GenError> {
+    fn rcp_seq(&mut self) -> Result<(), GenError> {
         try!(set_console_cursor_position(self.console, self.scp));
         Ok(())
     }
 
-    fn osc_txt_seq<W: Write>(&mut self, _: &mut W, n: u16, txt: &str) -> Result<(), GenError> {
+    fn osc_txt_seq(&mut self, n: u16, txt: &str) -> Result<(), GenError> {
         unsafe {
             match n {
                 0 | 2 => {
@@ -377,17 +387,17 @@ impl AnsiInterpret for ConsoleInterpreter {
         }
     }
 
-    fn hvp_seq<W: Write>(&mut self, sink: &mut W, r: u16, c: u16) -> Result<(), GenError> {
-        self.cup_seq(sink, r, c)
+    fn hvp_seq(&mut self, r: u16, c: u16) -> Result<(), GenError> {
+        self.cup_seq(r, c)
     }
 
-    fn other_seq<W: Write>(&mut self, sink: &mut W, bytes: &[u8]) -> Result<(), GenError> {
+    fn other_seq(&mut self, bytes: &[u8]) -> Result<(), GenError> {
         let mut bs = String::new();
         for b in bytes {
             use std::fmt::Write;
             write!(bs, "{:02x}", b).unwrap();
         }
-        rethrow!(write!(sink, "[UNK:{}]", bs))
+        rethrow!(write!(self.sink, "[UNK:{}]", bs))
     }
 }
 

@@ -39,14 +39,8 @@ marker_error! {
     }
 }
 
-pub struct AnsiIntercept<W, I>
-where
-    W: Write,
-    I: AnsiInterpret,
-{
-    /// Where output should be written.
-    sink: W,
-
+pub struct AnsiIntercept<I>
+where I: AnsiInterpret {
     /// Buffer for incomplete escape sequences.
     buffer: SmallVec<[u8; MIN_BUFFER_SIZE]>,
 
@@ -54,25 +48,18 @@ where
     interp: I,
 }
 
-impl<W, I> AnsiIntercept<W, I>
-where
-    W: Write,
-    I: AnsiInterpret,
-{
-    pub fn new(sink: W, interp: I) -> Self {
+impl<I> AnsiIntercept<I>
+where I: AnsiInterpret {
+    pub fn new(interp: I) -> Self {
         AnsiIntercept {
-            sink: sink,
             buffer: SmallVec::new(),
             interp: interp,
         }
     }
 }
 
-impl<W, I> Write for AnsiIntercept<W, I>
-where
-    W: Write,
-    I: AnsiInterpret,
-{
+impl<I> Write for AnsiIntercept<I>
+where I: AnsiInterpret {
     fn write(&mut self, mut buf: &[u8]) -> io::Result<usize> {
         /*
         Fast path: no partial escape sequence being buffered, so if we can find a run of bytes with no escape sequences, we can just dump everything up to that point.
@@ -85,7 +72,7 @@ where
                 .unwrap_or(buf.len());
             if run_len > 0 {
                 let run = &buf[0..run_len];
-                return self.interp.write_text(&mut self.sink, run);
+                return self.interp.write_text(run);
             }
         }
 
@@ -109,17 +96,17 @@ where
             let bytes = self.buffer.iter().cloned()
                 .chain(buf.iter().cloned());
 
-            extract_sequence(bytes, &mut self.sink, &mut self.interp)
+            extract_sequence(bytes, &mut self.interp)
         } {
             Ok(EscSeqParse::IncompleteSeq) => {
                 // If the buffer is getting suspiciously long, give up and dump up to `MAX_SEQ_SIZE` bytes.  This is so that spurious escape bytes don't cause large chunks of output to disappear.
                 if self.buffer.len() + buf.len() > MAX_SEQ_SIZE {
                     let limit = MAX_SEQ_SIZE - self.buffer.len();
-                    try!(self.sink.write_all(&self.buffer));
+                    try!(self.interp.write_text(&self.buffer));
                     self.buffer = SmallVec::new();
 
                     let limit = min(limit, buf.len());
-                    try!(self.sink.write_all(&buf[..limit]));
+                    try!(self.interp.write_text(&buf[..limit]));
                     Ok(limit)
                 } else {
                     self.buffer.extend(buf.iter().cloned());
@@ -145,7 +132,7 @@ where
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.sink.flush()
+        self.interp.flush()
     }
 }
 
@@ -206,27 +193,28 @@ impl TryFrom<Option<u8>> for EraseLine {
 }
 
 pub trait AnsiInterpret {
-    fn write_text<W: Write>(&mut self, sink: &mut W, buf: &[u8]) -> io::Result<usize> {
-        sink.write(buf)
+    fn write_text(&mut self, buf: &[u8]) -> io::Result<usize>;
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+
+    fn cuu_seq(&mut self, r: u16) -> Result<(), GenError> { Ok(()) }
+    fn cud_seq(&mut self, r: u16) -> Result<(), GenError> { Ok(()) }
+    fn cuf_seq(&mut self, c: u16) -> Result<(), GenError> { Ok(()) }
+    fn cub_seq(&mut self, c: u16) -> Result<(), GenError> { Ok(()) }
+    fn cup_seq(&mut self, r: u16, c: u16) -> Result<(), GenError> { Ok(()) }
+    fn ed_seq(&mut self, n: EraseDisplay) -> Result<(), GenError> { Ok(()) }
+    fn el_seq(&mut self, n: EraseLine) -> Result<(), GenError> { Ok(()) }
+    fn sgr_seq(&mut self, ns: &[u8]) -> Result<(), GenError> { Ok(()) }
+    fn dsr_seq(&mut self) -> Result<(), GenError> { Ok(()) }
+    fn scp_seq(&mut self) -> Result<(), GenError> { Ok(()) }
+    fn rcp_seq(&mut self) -> Result<(), GenError> { Ok(()) }
+
+    fn osc_txt_seq(&mut self, n: u16, txt: &str) -> Result<(), GenError> { Ok(()) }
+
+    fn hvp_seq(&mut self, r: u16, c: u16) -> Result<(), GenError> {
+        self.cup_seq(r, c)
     }
 
-    fn cuu_seq<W: Write>(&mut self, sink: &mut W, r: u16) -> Result<(), GenError> { Ok(()) }
-    fn cud_seq<W: Write>(&mut self, sink: &mut W, r: u16) -> Result<(), GenError> { Ok(()) }
-    fn cuf_seq<W: Write>(&mut self, sink: &mut W, c: u16) -> Result<(), GenError> { Ok(()) }
-    fn cub_seq<W: Write>(&mut self, sink: &mut W, c: u16) -> Result<(), GenError> { Ok(()) }
-    fn cup_seq<W: Write>(&mut self, sink: &mut W, r: u16, c: u16) -> Result<(), GenError> { Ok(()) }
-    fn ed_seq<W: Write>(&mut self, sink: &mut W, n: EraseDisplay) -> Result<(), GenError> { Ok(()) }
-    fn el_seq<W: Write>(&mut self, sink: &mut W, n: EraseLine) -> Result<(), GenError> { Ok(()) }
-    fn sgr_seq<W: Write>(&mut self, sink: &mut W, ns: &[u8]) -> Result<(), GenError> { Ok(()) }
-    fn dsr_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> { Ok(()) }
-    fn scp_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> { Ok(()) }
-    fn rcp_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> { Ok(()) }
-
-    fn osc_txt_seq<W: Write>(&mut self, sink: &mut W, n: u16, txt: &str) -> Result<(), GenError> { Ok(()) }
-
-    fn hvp_seq<W: Write>(&mut self, sink: &mut W, r: u16, c: u16) -> Result<(), GenError> { self.cup_seq(sink, r, c) }
-
-    fn other_seq<W: Write>(&mut self, sink: &mut W, bytes: &[u8]) -> Result<(), GenError> {
+    fn other_seq(&mut self, bytes: &[u8]) -> Result<(), GenError> {
         Ok(())
     }
 }
@@ -250,10 +238,9 @@ type ParseResult = Result<EscSeqParse, GenError>;
 /**
 This function's job is to extract a complete escape sequence from the input, then pass *that* to the function that will parse it (sans opening `ESC`).
 */
-fn extract_sequence<B, W, I>(bytes: B, sink: &mut W, interp: &mut I) -> ParseResult
+fn extract_sequence<B, I>(bytes: B, interp: &mut I) -> ParseResult
 where
     B: Iterator<Item=u8> + Clone,
-    W: Write,
     I: AnsiInterpret,
 {
     use self::EscSeqParse::*;
@@ -270,7 +257,7 @@ where
 
     let seq_bytes = bytes_start.take(1 + seq_len).skip(1);
     let seq_bytes: SmallVec<[_; SEQ_BUFFER_SIZE]> = seq_bytes.collect();
-    match parse_sequence(&seq_bytes, sink, interp) {
+    match parse_sequence(&seq_bytes, interp) {
         // Don't forget that we dropped the leading `ESC`.
         Ok(UsedBytes(bs)) => Ok(UsedBytes(bs + 1)),
         other => rethrow!(other)
@@ -329,11 +316,8 @@ impl ExtractState {
 /**
 Parse the extracted escape sequence, and call the appropriate trait method.
 */
-fn parse_sequence<W, I>(bytes: &[u8], sink: &mut W, interp: &mut I) -> ParseResult
-where
-    W: Write,
-    I: AnsiInterpret,
-{
+fn parse_sequence<I>(bytes: &[u8], interp: &mut I) -> ParseResult
+where I: AnsiInterpret {
     use self::EscSeqParse::*;
 
     /*
@@ -352,73 +336,73 @@ where
             b'A' => {
                 let r = try!(parse_1n(arg_bytes));
                 let r = r.unwrap_or(1);
-                rethrow!(interp.cuu_seq(sink, r).map(ok_result))
+                rethrow!(interp.cuu_seq(r).map(ok_result))
             },
             b'B' => {
                 let r = try!(parse_1n(arg_bytes));
                 let r = r.unwrap_or(1);
-                rethrow!(interp.cud_seq(sink, r).map(ok_result))
+                rethrow!(interp.cud_seq(r).map(ok_result))
             },
             b'C' => {
                 let c = try!(parse_1n(arg_bytes));
                 let c = c.unwrap_or(1);
-                rethrow!(interp.cuf_seq(sink, c).map(ok_result))
+                rethrow!(interp.cuf_seq(c).map(ok_result))
             },
             b'D' => {
                 let c = try!(parse_1n(arg_bytes));
                 let c = c.unwrap_or(1);
-                rethrow!(interp.cub_seq(sink, c).map(ok_result))
+                rethrow!(interp.cub_seq(c).map(ok_result))
             },
             b'H' => {
                 let (r, c) = try!(parse_2n(arg_bytes));
                 let r = r.unwrap_or(1);
                 let c = c.unwrap_or(1);
-                rethrow!(interp.cup_seq(sink, r, c).map(ok_result))
+                rethrow!(interp.cup_seq(r, c).map(ok_result))
             },
             b'J' => {
                 let n = try!(parse_1n(arg_bytes));
                 let n = try!(n.try_into());
-                rethrow!(interp.ed_seq(sink, n)
+                rethrow!(interp.ed_seq(n)
                     .map(ok_result))
             },
             b'K' => {
                 let n = try!(parse_1n(arg_bytes));
                 let n = try!(n.try_into());
-                rethrow!(interp.el_seq(sink, n)
+                rethrow!(interp.el_seq(n)
                     .map(ok_result))
             },
             b'f' => {
                 let (r, c) = try!(parse_2n(arg_bytes));
                 let r = r.unwrap_or(1);
                 let c = c.unwrap_or(1);
-                rethrow!(interp.hvp_seq(sink, r, c).map(ok_result))
+                rethrow!(interp.hvp_seq(r, c).map(ok_result))
             },
             b'm' => {
                 let mut ns = try!(parse_ns::<[_; 2], _>(arg_bytes));
                 if ns.len() == 0 {
                     ns.push(0);
                 }
-                rethrow!(interp.sgr_seq(sink, &ns).map(ok_result))
+                rethrow!(interp.sgr_seq(&ns).map(ok_result))
             },
             b'n' => {
                 let n = try!(parse_1n(arg_bytes));
                 let n = n.unwrap_or(0);
                 // n = 6 is the only meaningful parameter for us.
                 if n == 6 {
-                    rethrow!(interp.dsr_seq(sink).map(ok_result))
+                    rethrow!(interp.dsr_seq().map(ok_result))
                 } else {
-                    rethrow!(interp.other_seq(sink, &bytes).map(ok_result))
+                    rethrow!(interp.other_seq(&bytes).map(ok_result))
                 }
             },
             b's' => {
                 try!(parse_0n(arg_bytes));
-                rethrow!(interp.scp_seq(sink).map(ok_result))
+                rethrow!(interp.scp_seq().map(ok_result))
             },
             b'u' => {
                 try!(parse_0n(arg_bytes));
-                rethrow!(interp.rcp_seq(sink).map(ok_result))
+                rethrow!(interp.rcp_seq().map(ok_result))
             },
-            _ => rethrow!(interp.other_seq(sink, &bytes).map(ok_result))
+            _ => rethrow!(interp.other_seq(&bytes).map(ok_result))
         }
     } else if let Some(&b']') = bytes.first() {
         // Grab leading number.
@@ -429,7 +413,7 @@ where
         // Strip ;
         match tail_bytes.first() {
             Some(&b';') => (),
-            _ => return rethrow!(interp.other_seq(sink, &bytes).map(ok_result))
+            _ => return rethrow!(interp.other_seq(&bytes).map(ok_result))
         }
         let tail_bytes = &tail_bytes[1..];
 
@@ -444,9 +428,9 @@ where
         let txt = &tail_bytes[..tail_bytes.len() - drop_end];
         let txt = ::std::str::from_utf8(txt).expect("non-ASCII in OSC txt");
 
-        rethrow!(interp.osc_txt_seq(sink, n, txt).map(ok_result))
+        rethrow!(interp.osc_txt_seq(n, txt).map(ok_result))
     } else {
-        rethrow!(interp.other_seq(sink, &bytes).map(ok_result))
+        rethrow!(interp.other_seq(&bytes).map(ok_result))
     }
 }
 

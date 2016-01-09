@@ -244,8 +244,51 @@ impl AnsiInterpret for ConsoleInterpreter {
         }
     }
 
-    fn el_seq<W: Write>(&mut self, sink: &mut W, n: EraseLine) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[EL:{}]", n as u8))
+    fn el_seq<W: Write>(&mut self, _: &mut W, n: EraseLine) -> Result<(), GenError> {
+        use ansi::EraseLine::*;
+        unsafe {
+            let csbi = try!(get_console_screen_buffer_info(self.console));
+
+            let (start, len) = match n {
+                StartToCursor => {
+                    let start = COORD {
+                        X: 0,
+                        Y: csbi.dwCursorPosition.Y,
+                    };
+                    let cols = csbi.dwCursorPosition.X + 1;
+                    let cols = cols.value_as::<DWORD>().unwrap_or_saturate();
+                    (start, cols)
+                },
+                CursorToEnd => {
+                    let start = COORD {
+                        X: csbi.dwCursorPosition.X,
+                        Y: csbi.dwCursorPosition.Y,
+                    };
+                    let cols = csbi.dwSize.X - csbi.dwCursorPosition.X;
+                    let cols = cols.value_as::<DWORD>().unwrap_or_saturate();
+                    (start, cols)
+                },
+                All => {
+                    let start = COORD {
+                        X: 0,
+                        Y: csbi.dwCursorPosition.Y,
+                    };
+                    let cols = csbi.dwSize.X;
+                    let cols = cols.value_as::<DWORD>().unwrap_or_saturate();
+                    (start, cols)
+                },
+            };
+
+            let mut dummy = 0;
+            if kernel32::FillConsoleOutputAttribute(self.console, csbi.wAttributes, len, start, &mut dummy) == 0 {
+                throw!(io::Error::last_os_error());
+            }
+            if kernel32::FillConsoleOutputCharacterW(self.console, 0x20, len, start, &mut dummy) == 0 {
+                throw!(io::Error::last_os_error());
+            }
+
+            Ok(())
+        }
     }
 
     fn sgr_seq<W: Write>(&mut self, sink: &mut W, ns: &[u8]) -> Result<(), GenError> {

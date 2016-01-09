@@ -289,7 +289,7 @@ impl AnsiInterpret for ConsoleInterpreter {
     }
 
     fn hvp_seq<W: Write>(&mut self, sink: &mut W, r: u16, c: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[HVP:{},{}]", r, c))
+        self.cup_seq(sink, r, c)
     }
 
     fn other_seq<W: Write>(&mut self, sink: &mut W, bytes: &[u8]) -> Result<(), GenError> {

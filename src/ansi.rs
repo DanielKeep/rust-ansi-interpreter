@@ -7,10 +7,10 @@ use std::cmp::min;
 use std::error::Error;
 use std::ops::{Add, Mul};
 use std::io::{self, Write};
-use conv::{TryFrom, TryInto, UnwrapOk, ValueInto};
+use conv::{TryFrom, TryInto, UnwrapOk, ValueFrom, ValueInto};
 use num::Zero;
 use smallvec::{Array, SmallVec};
-use util::{Counted, CountedIter, drop_front};
+use util::drop_front;
 
 // Should be two pointers worth to get the most out of SmallVec.
 #[cfg(target_pointer_width = "32")]
@@ -20,6 +20,11 @@ const MIN_BUFFER_SIZE: usize = 16;
 
 // How long will we let a sequence get before we give up and assume someone's trying to crash us?
 const MAX_SEQ_SIZE: usize = 256;
+
+#[test]
+fn test_max_seq_size() {
+    assert!(MIN_BUFFER_SIZE < MAX_SEQ_SIZE);
+}
 
 // How much stack space should we use for buffering sequences during parsing?  This has to be a number supported by `smallvec`.
 const SEQ_BUFFER_SIZE: usize = 32;
@@ -107,16 +112,19 @@ where
             extract_sequence(bytes, &mut self.sink, &mut self.interp)
         } {
             Ok(EscSeqParse::IncompleteSeq) => {
-                self.buffer.extend(buf.iter().cloned());
-
-                // If the buffer is getting suspiciously long, give up and dump the contents of the buffer anyway.  This is so that spurious escape bytes don't cause large chunks of output to disappear.
-                if self.buffer.len() > MAX_SEQ_SIZE {
-                    let r = self.sink.write_all(&self.buffer);
+                // If the buffer is getting suspiciously long, give up and dump up to `MAX_SEQ_SIZE` bytes.  This is so that spurious escape bytes don't cause large chunks of output to disappear.
+                if self.buffer.len() + buf.len() > MAX_SEQ_SIZE {
+                    let limit = MAX_SEQ_SIZE - self.buffer.len();
+                    try!(self.sink.write_all(&self.buffer));
                     self.buffer = SmallVec::new();
-                    try!(r);
-                }
 
-                Ok(buf.len())
+                    let limit = min(limit, buf.len());
+                    try!(self.sink.write_all(&buf[..limit]));
+                    Ok(limit)
+                } else {
+                    self.buffer.extend(buf.iter().cloned());
+                    Ok(buf.len())
+                }
             },
 
             Ok(EscSeqParse::UsedBytes(n)) => {
@@ -249,28 +257,70 @@ where
     use self::EscSeqParse::*;
 
     let bytes_start = bytes.clone();
-    let mut bytes = CountedIter::new(bytes);
+    let mut bytes = bytes;
     assert_eq!(bytes.next(), Some(ESC));
 
-    match bytes.next() {
-        Some(b) => {
-            if b == b'[' || !is_escape_end(b) {
-                // Consume up to the end of the sequence.
-                match (&mut bytes).filter(|&b| is_escape_end(b)).next() {
-                    Some(_) => (),
-                    None => return Ok(IncompleteSeq)
-                }
-            }
-            let seq_len = bytes.counted();
-            let seq_bytes = bytes_start.take(seq_len).skip(1);
-            let seq_bytes: SmallVec<[u8; SEQ_BUFFER_SIZE]> = seq_bytes.collect();
-            match parse_sequence(&seq_bytes, sink, interp) {
-                // Don't forget that we dropped the leading `ESC`.
-                Ok(UsedBytes(bs)) => Ok(UsedBytes(bs+1)),
-                other => rethrow!(other),
-            }
-        }
-        None => Ok(IncompleteSeq),
+    let mut state = ExtractState::Start;
+    let seq_len = { bytes.take(MAX_SEQ_SIZE).take_while(|&b| state.push(b)).count() };
+    if state != ExtractState::End {
+        return Ok(IncompleteSeq);
+    }
+
+    let seq_bytes = bytes_start.take(1 + seq_len).skip(1);
+    let seq_bytes: SmallVec<[_; SEQ_BUFFER_SIZE]> = seq_bytes.collect();
+    match parse_sequence(&seq_bytes, sink, interp) {
+        // Don't forget that we dropped the leading `ESC`.
+        Ok(UsedBytes(bs)) => Ok(UsedBytes(bs + 1)),
+        other => rethrow!(other)
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum ExtractState {
+    Start,
+    CsiStart,
+    CsiBody,
+    CsiTail,
+    Osc,
+    OscEsc,
+    End
+}
+
+impl ExtractState {
+    fn push(&mut self, b: u8) -> bool {
+        use self::ExtractState::*;
+
+        *self = match (*self, b) {
+            (Start, b'[') => CsiStart,
+            (Start, b']') => Osc,
+            (Start, _) => End,
+
+            (CsiStart, 0x3c...0x3f) => CsiStart,
+            (CsiStart, 0x30...0x39) | (CsiStart, 0x3b) => CsiBody,
+            (CsiStart, 0x20...0x2f) => CsiTail,
+            (CsiStart, 0x40...0x7e) => End,
+            (CsiStart, _) => End,
+
+            (CsiBody, 0x30...0x39) | (CsiBody, 0x3b) => CsiBody,
+            (CsiBody, 0x20...0x2f) => CsiTail,
+            (CsiBody, 0x40...0x7e) => End,
+            (CsiBody, _) => End,
+
+            (CsiTail, 0x20...0x2f) => CsiTail,
+            (CsiTail, 0x40...0x7e) => End,
+            (CsiTail, _) => End,
+
+            (Osc, 0x07) => End,
+            (Osc, 0x1b) => OscEsc,
+            (Osc, _) => Osc,
+
+            (OscEsc, b'\\') => End,
+            (OscEsc, _) => Osc,
+
+            (End, _) => return false
+        };
+
+        true
     }
 }
 
@@ -373,9 +423,9 @@ where
     }
 }
 
-trait ParseNum: Zero + From<u8> + Add<Self, Output=Self> + Mul<Self, Output=Self> {}
+trait ParseNum: Zero + ValueFrom<u64> + Add<Self, Output=Self> + Mul<Self, Output=Self> {}
 impl<T> ParseNum for T
-where T: Zero + From<u8> + Add<T, Output=T> + Mul<T, Output=T> {}
+where T: Zero + ValueFrom<u64> + Add<T, Output=T> + Mul<T, Output=T> {}
 
 fn parse_0n(mut bytes: &[u8]) -> Result<(), MalformedSeq> {
     if bytes != b"" {
@@ -503,7 +553,9 @@ where N: ParseNum {
     while let Some(&b) = bytes.first() {
         match b {
             b'0'...b'9' => {
-                v = (v * 10.into()) + (b - b'0').into();
+                let dig = try!(((b - b'0') as u64).value_into()
+                    .map_err(|_| MalformedSeq));
+                v = (v * try!(10.value_into().map_err(|_| MalformedSeq))) + dig;
                 default = false;
                 bytes = {&bytes[1..]};
             },

@@ -7,6 +7,7 @@ use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use self::mlw::*;
+use util::SharedWrite;
 
 pub fn intercept_stdio() {
     try_intercept_stdio().unwrap()
@@ -16,22 +17,69 @@ fn try_intercept_stdio() -> io::Result<()> {
     use std::os::windows::io::AsRawHandle;
 
     // Get the current stdout handle.
+    let conin = try!(try!(get_std_handle(StdHandle::Input))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "no stdin handle available for this process")));
     let conout = try!(try!(get_std_handle(StdHandle::Output))
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "no stdout handle available for this process")));
     // let conerr = try!(try!(get_std_handle(StdHandle::Error))
     //     .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "no stderr handle available for this process")));
 
     // Create the pipe we'll use to capture stdout output.
+    let (irp, iwp) = try!(create_pipe());
     let (orp, owp) = try!(create_pipe());
     let (erp, ewp) = try!(create_pipe());
 
-    let conout_hand = conout.as_raw_handle();
+    let console = conout.as_raw_handle();
 
-    let interp = super::ConsoleInterpreter::new(conout, conout_hand);
+    let iwp = SharedWrite::new(iwp);
+
+    let interp = super::ConsoleInterpreter::new(iwp.clone(), conout, console);
     let interc = ::AnsiIntercept::new(interp);
     let interc = Arc::new(Mutex::new(interc));
 
     // Spin up the interpreter threads.
+    let _ = try!(thread::Builder::new()
+        .name(String::from("ansi_interpreter.stdin"))
+        .spawn({ move || {
+            let mut conin = conin;
+            let mut iwp = iwp;
+            let mut buf = [0; 4096];
+
+            loop {
+                let bytes = match conin.read(&mut buf) {
+                    Ok(0) => {
+                        // *Probably* EOF.
+                        return;
+                    },
+
+                    Ok(bytes) => bytes,
+
+                    Err(err) => {
+                        panic!("error while reading from stdin: {}", err);
+                    }
+                };
+
+                // Send the bytes along to the Rust stdin.
+                let mut buf = &buf[..bytes];
+                while buf.len() > 0 {
+                    match iwp.write(buf) {
+                        Ok(0) => {
+                            // *Probably* cannot write any more.
+                            return;
+                        }
+
+                        Ok(b) => {
+                            buf = &buf[b..];
+                        },
+
+                        Err(err) => {
+                            panic!("error while writing to stdin pipe: {}", err);
+                        }
+                    }
+                }
+            }
+        } }));
+
     let _ = try!(thread::Builder::new()
         .name(String::from("ansi_interpreter.stdout"))
         .spawn({ let interc = interc.clone(); move || {
@@ -115,6 +163,7 @@ fn try_intercept_stdio() -> io::Result<()> {
         } }));
 
     // Redirect the process handle.
+    try!(set_std_handle(StdHandle::Input, irp));
     try!(set_std_handle(StdHandle::Output, owp));
     try!(set_std_handle(StdHandle::Error, ewp));
 

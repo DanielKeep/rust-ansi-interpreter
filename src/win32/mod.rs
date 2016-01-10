@@ -46,16 +46,20 @@ const BACKGROUND_RED: WORD = winapi::BACKGROUND_RED as WORD;
 const BACKGROUND_INTENSITY: WORD = winapi::BACKGROUND_INTENSITY as WORD;
 const BACKGROUND_WHITE: WORD = BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE;
 
-pub struct ConsoleInterpreter<W> where W: Write {
-    sink: W,
+pub struct ConsoleInterpreter<WIn, WOut>
+where WIn: Write, WOut: Write {
+    stdin: WIn,
+    stdout: WOut,
     console: SendHandle,
     scp: COORD,
 }
 
-impl<W> ConsoleInterpreter<W> where W: Write {
-    pub fn new(sink: W, console: HANDLE) -> Self {
+impl<WIn, WOut> ConsoleInterpreter<WIn, WOut>
+where WIn: Write, WOut: Write {
+    pub fn new(stdin: WIn, stdout: WOut, console: HANDLE) -> Self {
         ConsoleInterpreter {
-            sink: sink,
+            stdin: stdin,
+            stdout: stdout,
             console: SendHandle(console),
             scp: COORD {
                 X: 0,
@@ -81,13 +85,14 @@ impl<W> ConsoleInterpreter<W> where W: Write {
     }
 }
 
-impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
+impl<WIn, WOut> AnsiInterpret for ConsoleInterpreter<WIn, WOut>
+where WIn: Write, WOut: Write {
     fn write_text(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.sink.write(buf)
+        self.stdout.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.sink.flush()
+        self.stdout.flush()
     }
 
     fn cuu_seq(&mut self, r: u16) -> Result<(), GenError> {
@@ -341,7 +346,16 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
     }
 
     fn dsr_seq(&mut self) -> Result<(), GenError> {
-        rethrow!(self.sink.write_all(b"[DSR]"))
+        let csbi = try!(get_console_screen_buffer_info(self.console.0));
+
+        let abs_pos = csbi.dwCursorPosition;
+        let win = csbi.srWindow;
+
+        let rel_x = (abs_pos.X - win.Left).value_as::<u16>().unwrap_or_saturate() + 1;
+        let rel_y = (abs_pos.Y - win.Top).value_as::<u16>().unwrap_or_saturate() + 1;
+
+        try!(write!(self.stdin, "\x1b[{};{}R", rel_y, rel_x));
+        Ok(())
     }
 
     fn scp_seq(&mut self) -> Result<(), GenError> {
@@ -380,7 +394,7 @@ impl<W> AnsiInterpret for ConsoleInterpreter<W> where W: Write {
             use std::fmt::Write;
             write!(bs, "{:02x}", b).unwrap();
         }
-        rethrow!(write!(self.sink, "[UNK:{}]", bs))
+        rethrow!(write!(self.stdout, "[UNK:{}]", bs))
     }
 }
 

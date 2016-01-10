@@ -18,52 +18,55 @@ use itertools::Itertools;
 
 type GenError = Box<std::error::Error + Send + Sync>;
 
-struct Dump;
+struct Dump<W: Write>(W);
 
-impl ai::AnsiInterpret for Dump {
-    fn cuu_seq<W: Write>(&mut self, sink: &mut W, r: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[CUU:{}]", r))
+impl<W: Write> ai::AnsiInterpret for Dump<W> {
+    fn write_text(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
     }
-    fn cud_seq<W: Write>(&mut self, sink: &mut W, r: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[CUD:{}]", r))
+    fn cuu_seq(&mut self, r: u16) -> Result<(), GenError> {
+        rethrow!(write!(self.0, "[CUU:{}]", r))
     }
-    fn cuf_seq<W: Write>(&mut self, sink: &mut W, c: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[CUF:{}]", c))
+    fn cud_seq(&mut self, r: u16) -> Result<(), GenError> {
+        rethrow!(write!(self.0, "[CUD:{}]", r))
     }
-    fn cub_seq<W: Write>(&mut self, sink: &mut W, c: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[CUF:{}]", c))
+    fn cuf_seq(&mut self, c: u16) -> Result<(), GenError> {
+        rethrow!(write!(self.0, "[CUF:{}]", c))
     }
-    fn cup_seq<W: Write>(&mut self, sink: &mut W, r: u16, c: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[CUP:{},{}]", r, c))
+    fn cub_seq(&mut self, c: u16) -> Result<(), GenError> {
+        rethrow!(write!(self.0, "[CUF:{}]", c))
     }
-    fn ed_seq<W: Write>(&mut self, sink: &mut W, n: ai::EraseDisplay) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[ED:{}]", n as u8))
+    fn cup_seq(&mut self, r: u16, c: u16) -> Result<(), GenError> {
+        rethrow!(write!(self.0, "[CUP:{},{}]", r, c))
     }
-    fn el_seq<W: Write>(&mut self, sink: &mut W, n: ai::EraseLine) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[EL:{}]", n as u8))
+    fn ed_seq(&mut self, n: ai::EraseDisplay) -> Result<(), GenError> {
+        rethrow!(write!(self.0, "[ED:{}]", n as u8))
     }
-    fn sgr_seq<W: Write>(&mut self, sink: &mut W, ns: &[u8]) -> Result<(), GenError> {
+    fn el_seq(&mut self, n: ai::EraseLine) -> Result<(), GenError> {
+        rethrow!(write!(self.0, "[EL:{}]", n as u8))
+    }
+    fn sgr_seq(&mut self, ns: &[u8]) -> Result<(), GenError> {
         let ns = ns.iter().join(",");
-        rethrow!(write!(sink, "[SGR:{}]", ns))
+        rethrow!(write!(self.0, "[SGR:{}]", ns))
     }
-    fn dsr_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> {
-        rethrow!(sink.write_all(b"[DSR]"))
+    fn dsr_seq(&mut self) -> Result<(), GenError> {
+        rethrow!(self.0.write_all(b"[DSR]"))
     }
-    fn scp_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> {
-        rethrow!(sink.write_all(b"[SCP]"))
+    fn scp_seq(&mut self) -> Result<(), GenError> {
+        rethrow!(self.0.write_all(b"[SCP]"))
     }
-    fn rcp_seq<W: Write>(&mut self, sink: &mut W) -> Result<(), GenError> {
-        rethrow!(sink.write_all(b"[RCP]"))
+    fn rcp_seq(&mut self) -> Result<(), GenError> {
+        rethrow!(self.0.write_all(b"[RCP]"))
     }
-    fn hvp_seq<W: Write>(&mut self, sink: &mut W, r: u16, c: u16) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[HVP:{},{}]", r, c))
-    }
-
-    fn osc_txt_seq<W: Write>(&mut self, sink: &mut W, n: u16, txt: &str) -> Result<(), GenError> {
-        rethrow!(write!(sink, "[OSC:{},{:?}]", n, txt))
+    fn hvp_seq(&mut self, r: u16, c: u16) -> Result<(), GenError> {
+        rethrow!(write!(self.0, "[HVP:{},{}]", r, c))
     }
 
-    fn other_seq<W: Write>(&mut self, sink: &mut W, bytes: &[u8]) -> Result<(), GenError> {
+    fn osc_txt_seq(&mut self, n: u16, txt: &str) -> Result<(), GenError> {
+        rethrow!(write!(self.0, "[OSC:{},{:?}]", n, txt))
+    }
+
+    fn other_seq(&mut self, bytes: &[u8]) -> Result<(), GenError> {
         let mut bs = String::new();
         for b in bytes {
             use std::fmt::Write;
@@ -72,7 +75,7 @@ impl ai::AnsiInterpret for Dump {
                     io::ErrorKind::Other,
                     "formatting error")));
         }
-        rethrow!(write!(sink, "[UNK:{}]", bs))
+        rethrow!(write!(self.0, "[UNK:{}]", bs))
     }
 }
 
@@ -81,7 +84,7 @@ fn test_decode() {
     println!("");
     let mut s = vec![];
     {
-        let mut intercept = ai::AnsiIntercept::new(&mut s, Dump);
+        let mut intercept = ai::AnsiIntercept::new(Dump(&mut s));
         write!(intercept,
 "
 Cursor up four: \x1b[4A = \x1b[2A\x1b[2A.

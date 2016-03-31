@@ -12,6 +12,8 @@ use num::Zero;
 use smallvec::{Array, SmallVec};
 use util::drop_front;
 
+pub type GenError = Box<Error + Send + Sync>;
+
 // Should be two pointers worth to get the most out of SmallVec.
 #[cfg(target_pointer_width = "32")]
 const MIN_BUFFER_SIZE: usize = 8;
@@ -232,7 +234,6 @@ fn test_esc_seq_parse_used_bytes_size() {
     assert!(max_size >= MAX_SEQ_SIZE);
 }
 
-type GenError = Box<Error + Send + Sync>;
 type ParseResult = Result<EscSeqParse, GenError>;
 
 /**

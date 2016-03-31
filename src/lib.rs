@@ -8,6 +8,8 @@ pub use export::*;
 
 mod ansi;
 mod util;
+
+#[cfg(windows)]
 mod win32;
 
 mod export {

@@ -28,7 +28,7 @@ use self::wio::wide::ToWide;
 use ansi::{EraseDisplay, EraseLine, AnsiInterpret};
 use conv::{ConvUtil, UnwrapOrSaturate};
 
-type GenError = Box<::std::error::Error + Send + Sync>;
+pub type GenError = Box<::std::error::Error + Send + Sync>;
 
 const COLOR_ALL: WORD = FOREGROUND_WHITE | FOREGROUND_INTENSITY | BACKGROUND_WHITE | BACKGROUND_INTENSITY;
 
